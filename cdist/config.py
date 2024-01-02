@@ -228,10 +228,7 @@ class Config:
         it = itertools.chain(cls.hosts(args.host), cls.hosts(args.hostfile))
 
         process_args = []
-        if args.parallel:
-            log.trace("Processing hosts in parallel")
-        else:
-            log.trace("Processing hosts sequentially")
+
         for entry in it:
             host = entry
             host_base_path, hostdir = cls.create_host_base_dirs(
@@ -240,52 +237,49 @@ class Config:
                       host, host_base_path)
 
             hostcnt += 1
-            if args.parallel:
-                pargs = (host, host_base_path, hostdir, args, True,
-                         configuration)
-                log.trace("Args for multiprocessing operation for host %s: %s",
-                          host, pargs)
-                process_args.append(pargs)
-            else:
-                try:
-                    cls.onehost(host, host_base_path, hostdir,
-                                args, parallel=False,
-                                configuration=configuration)
-                except cdist.Error:
-                    failed_hosts.append(host)
-        if args.parallel and len(process_args) == 1:
-            log.debug("Only 1 host for parallel processing, doing it "
-                      "sequentially")
-            try:
-                cls.onehost(*process_args[0])
-            except cdist.Error:
-                failed_hosts.append(host)
-        elif args.parallel:
+
+            pargs = (host, host_base_path, hostdir, args, configuration)
+            log.trace("Args for host configuration operation for %s: %s",
+                      host, pargs)
+            process_args.append(pargs)
+
+        # process host(s)
+        if args.parallel and len(process_args) > 1:
+            log.trace("Processing hosts in parallel")
+
             if callable(getattr(multiprocessing, "get_start_method", None)):
                 # Python >= 3.4
                 log.trace(
                     "Multiprocessing start method is %s",
                     multiprocessing.get_start_method())
-            log.trace("Starting multiprocessing Pool for %d parallel host"
-                      " operation", args.parallel)
+            log.trace(
+                "Starting multiprocessing Pool for %d parallel host operation",
+                args.parallel)
 
-            results = mp_pool_run(cls.onehost,
-                                  process_args,
-                                  jobs=args.parallel)
-            log.trace(("Multiprocessing for parallel host operation "
-                       "finished"))
-            log.trace("Multiprocessing for parallel host operation "
-                      "results: %s", results)
+            results = mp_pool_run(
+                cls.onehost, process_args, jobs=args.parallel)
 
-            failed_hosts = [host for host, result in results if not result]
+            log.trace("Multiprocessing for parallel host operation finished")
+            log.trace(
+                "Multiprocessing for parallel host operation results: %s",
+                results)
+        else:
+            log.trace("Processing hosts sequentially")
+            if args.parallel and len(process_args) == 1:
+                log.debug("Only 1 host for parallel processing, doing it "
+                          "sequentially")
+
+            results = [cls.onehost(*args) for args in process_args]
+
+        failed_hosts = [host for (host, result) in results if not result]
 
         time_end = time.time()
-        log.verbose("Total processing time for %s host(s): %s", hostcnt,
-                    (time_end - time_start))
+        log.verbose("Total processing time for %u host(s): %s",
+                    hostcnt, (time_end - time_start))
 
         if len(failed_hosts) > 0:
-            raise cdist.Error("Failed to configure the following hosts: " +
-                              " ".join(failed_hosts))
+            raise cdist.Error("Failed to configure the following hosts: "
+                              + " ".join(failed_hosts))
         elif not args.out_path:
             # If tmp out path created then remove it, but only if no failed
             # hosts.
@@ -340,10 +334,10 @@ class Config:
 
     @classmethod
     def onehost(cls, host, host_base_path, host_dir_name, args,
-                parallel, configuration, remove_remote_files_dirs=False):
+                configuration, remove_remote_files_dirs=False):
         """Configure ONE system.
-           If operating in parallel then return tuple (host, True|False, )
-           so that main process knows for which host function was successful.
+        Returns tuple (host, True|False)
+        so that main process knows for which host function was successful.
         """
         log = cdist.log.getLogger(host)
 
@@ -391,16 +385,11 @@ class Config:
                     remove_remote_files_dirs=remove_remote_files_dirs)
             c.run()
             cls._remove_paths()
-
         except cdist.Error as e:
             log.error(e)
-            if parallel:
-                return (host, False, )
-            else:
-                raise
+            return (host, False)
 
-        if parallel:
-            return (host, True, )
+        return (host, True)
 
     @staticmethod
     def create_base_root_path(out_path=None):
