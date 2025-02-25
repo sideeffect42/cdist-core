@@ -40,3 +40,7 @@ def quote(s):
 
 def split(s):
     return shlex.split(s)
+
+
+def args_to_str(command):
+    return " ".join(map(quote, command))
